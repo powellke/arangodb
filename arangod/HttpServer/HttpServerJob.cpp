@@ -31,12 +31,14 @@
 #include "HttpServerJob.h"
 
 #include "Basics/logging.h"
+#include "Basics/WorkMonitor.h"
 #include "Dispatcher/DispatcherQueue.h"
 #include "HttpServer/AsyncJobManager.h"
 #include "HttpServer/HttpCommTask.h"
 #include "HttpServer/HttpHandler.h"
 #include "HttpServer/HttpServer.h"
 
+using namespace arangodb;
 using namespace triagens::rest;
 using namespace std;
 
@@ -72,7 +74,9 @@ HttpServerJob::HttpServerJob (HttpServer* server,
 ////////////////////////////////////////////////////////////////////////////////
 
 HttpServerJob::~HttpServerJob () {
-  delete _handler;
+  if (_handler != nullptr) {
+    WorkMonitor::releaseHandler(_handler);
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -112,18 +116,21 @@ void HttpServerJob::setDispatcherThread (DispatcherThread* thread) {
 ////////////////////////////////////////////////////////////////////////////////
 
 Job::status_t HttpServerJob::work () {
+  TRI_ASSERT(_handler != nullptr); 
+
   LOG_TRACE("beginning job %p", (void*) this);
  
-  TRI_ASSERT(_handler != nullptr); 
-  this->RequestStatisticsAgent::transfer(_handler);
+  HandlerWorkStack work(_handler, false);
+  this->RequestStatisticsAgent::transfer(_handler); // FMH TODO: MOVE
 
+  // check if task is already gone
   if (! isDetached() && _task == nullptr) {
-    // task is already gone
     return status_t(Job::JOB_DONE);
   }
 
   RequestStatisticsAgentSetRequestStart(_handler);
   _handler->prepareExecute();
+
   HttpHandler::status_t status;
 
   try {

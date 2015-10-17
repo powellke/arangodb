@@ -1,12 +1,11 @@
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief http server
+/// @brief work monitor class
 ///
 /// @file
 ///
 /// DISCLAIMER
 ///
-/// Copyright 2014-2015 ArangoDB GmbH, Cologne, Germany
-/// Copyright 2004-2014 triAGENS GmbH, Cologne, Germany
+/// Copyright 2015 ArangoDB GmbH, Cologne, Germany
 ///
 /// Licensed under the Apache License, Version 2.0 (the "License");
 /// you may not use this file except in compliance with the License.
@@ -23,338 +22,342 @@
 /// Copyright holder is ArangoDB GmbH, Cologne, Germany
 ///
 /// @author Dr. Frank Celler
-/// @author Achim Brandt
-/// @author Jan Steemann
-/// @author Copyright 2014-2015, ArangoDB GmbH, Cologne, Germany
-/// @author Copyright 2009-2014, triAGENS GmbH, Cologne, Germany
+/// @author Copyright 2015, ArangoDB GmbH, Cologne, Germany
 ////////////////////////////////////////////////////////////////////////////////
 
-#ifndef ARANGODB_HTTP_SERVER_HTTP_SERVER_H
-#define ARANGODB_HTTP_SERVER_HTTP_SERVER_H 1
+#ifndef ARANGODB_UTILS_WORK_MONITOR
+#define ARANGODB_UTILS_WORK_MONITOR 1
 
-#include "Basics/Mutex.h"
-#include "Basics/SpinLock.h"
-#include "HttpServer/HttpHandler.h"
-#include "Rest/ConnectionInfo.h"
-#include "Scheduler/TaskManager.h"
-
-// #define TRI_USE_SPIN_LOCK_GENERAL_SERVER 1
+#include "Basics/Thread.h"
 
 // -----------------------------------------------------------------------------
-// --SECTION--                                                  class HttpServer
+// --SECTION--                                              forward declarations
 // -----------------------------------------------------------------------------
 
 namespace triagens {
   namespace rest {
-    class AsyncJobManager;
-    class Dispatcher;
-    class EndpointList;
-    class HttpServerJob;
-    class HttpCommTask;
-    class HttpHandlerFactory;
-    class Job;
-    class ListenTask;
+    class HttpHandler;
+  }
+}
+
+namespace arangodb {
+
+// -----------------------------------------------------------------------------
+// --SECTION--                                               enum class WorkType
+// -----------------------------------------------------------------------------
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief general server
+/// @brief type of the current work
 ////////////////////////////////////////////////////////////////////////////////
 
-    class HttpServer : protected TaskManager {
-      HttpServer (HttpServer const&) = delete;
-      HttpServer const& operator= (HttpServer const&) = delete;
+  enum class WorkType {
+    THREAD,
+    HANDLER
+  };
+
+// -----------------------------------------------------------------------------
+// --SECTION--                                            struct WorkDescription
+// -----------------------------------------------------------------------------
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief description of the current work
+////////////////////////////////////////////////////////////////////////////////
+
+  struct WorkDescription {
+    WorkDescription (WorkType, WorkDescription*);
+
+    WorkType _type;
+    bool _destroy;
+
+    union data {
+      data () {};
+      ~data () {};
+
+      std::string name;
+      triagens::rest::HttpHandler* handler;
+    } _data;
+
+    WorkDescription* _prev;
+  };
+
+// -----------------------------------------------------------------------------
+// --SECTION--                                                 class WorkMonitor
+// -----------------------------------------------------------------------------
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief work monitor class
+////////////////////////////////////////////////////////////////////////////////
+
+  class WorkMonitor : public triagens::basics::Thread {
+
+// -----------------------------------------------------------------------------
+// --SECTION--                                      constructors and destructors
+// -----------------------------------------------------------------------------
+
+    public:
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief constructors a new monitor
+////////////////////////////////////////////////////////////////////////////////
+
+      WorkMonitor ();
 
 // -----------------------------------------------------------------------------
 // --SECTION--                                             static public methods
 // -----------------------------------------------------------------------------
 
-      public:
+    public:
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief destroys an endpoint server
+/// @brief creates an empty WorkDescription
 ////////////////////////////////////////////////////////////////////////////////
 
-        static int sendChunk (uint64_t, const std::string&);
-        
+      static WorkDescription* createWorkDescription (WorkType);
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief activates a WorkDescription
+////////////////////////////////////////////////////////////////////////////////
+
+      static void activateWorkDescription (WorkDescription*);
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief deactivates a WorkDescription
+////////////////////////////////////////////////////////////////////////////////
+
+      static WorkDescription* deactivateWorkDescription ();
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief frees an WorkDescription
+////////////////////////////////////////////////////////////////////////////////
+
+      static void freeWorkDescription (WorkDescription* desc);
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief pushes a threads
+////////////////////////////////////////////////////////////////////////////////
+
+      static void pushThread (triagens::basics::Thread* thread);
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief destroys threads
+////////////////////////////////////////////////////////////////////////////////
+
+      static void destroyThread (triagens::basics::Thread* thread);
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief thread deleter
+////////////////////////////////////////////////////////////////////////////////
+
+      static void DELETE_THREAD (WorkDescription* desc);
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief thread description string
+////////////////////////////////////////////////////////////////////////////////
+
+      static std::string STRING_THREAD (WorkDescription* desc);
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief pushes a handler
+////////////////////////////////////////////////////////////////////////////////
+
+      static void pushHandler (triagens::rest::HttpHandler*);
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief pops a handler
+////////////////////////////////////////////////////////////////////////////////
+
+      static void popHandler (triagens::rest::HttpHandler*);
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief pops and releases a handler
+////////////////////////////////////////////////////////////////////////////////
+
+      static void destroyHandler (triagens::rest::HttpHandler*);
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief releases a handler
+////////////////////////////////////////////////////////////////////////////////
+
+      static void releaseHandler (triagens::rest::HttpHandler*);
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief thread deleter
+////////////////////////////////////////////////////////////////////////////////
+
+      static void DELETE_HANDLER (WorkDescription* desc);
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief thread description string
+////////////////////////////////////////////////////////////////////////////////
+
+      static std::string STRING_HANDLER (WorkDescription* desc);
+
 // -----------------------------------------------------------------------------
-// --SECTION--                                      constructors and destructors
+// --SECTION--                                                    Thread methods
 // -----------------------------------------------------------------------------
 
-      public:
+    protected:
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief constructs a new general server with dispatcher and job manager
+/// {@inheritDoc}
 ////////////////////////////////////////////////////////////////////////////////
 
-        HttpServer (Scheduler*,
-                    Dispatcher*,
-                    HttpHandlerFactory*,
-                    AsyncJobManager*,
-                    double keepAliveTimeout);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief destructs a general server
-////////////////////////////////////////////////////////////////////////////////
-
-        virtual ~HttpServer ();
-
-// -----------------------------------------------------------------------------
-// --SECTION--                                            virtual public methods
-// -----------------------------------------------------------------------------
-
-      public:
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief returns the protocol
-////////////////////////////////////////////////////////////////////////////////
-
-        virtual char const* protocol () const {
-          return "http";
-        }
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief returns the encryption to be used
-////////////////////////////////////////////////////////////////////////////////
-
-        virtual Endpoint::EncryptionType encryptionType () const {
-          return Endpoint::ENCRYPTION_NONE;
-        }
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief generates a suitable communication task
-////////////////////////////////////////////////////////////////////////////////
-
-        virtual HttpCommTask* createCommTask (TRI_socket_t, const ConnectionInfo&);
+      void run () override;
 
 // -----------------------------------------------------------------------------
 // --SECTION--                                                    public methods
 // -----------------------------------------------------------------------------
 
-      public:
+    public:
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief returns the scheduler
+/// @brief initiate shutdown
 ////////////////////////////////////////////////////////////////////////////////
 
-        Scheduler* scheduler () const {
-          return _scheduler;
+      void shutdown () {
+        _stopping = false;
+      }
+
+// -----------------------------------------------------------------------------
+// --SECTION--                                                 private variables
+// -----------------------------------------------------------------------------
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief stop flag
+////////////////////////////////////////////////////////////////////////////////
+
+      std::atomic<bool> _stopping;
+  };
+
+// -----------------------------------------------------------------------------
+// --SECTION--                                                    class WorkItem
+// -----------------------------------------------------------------------------
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief auto push and pop
+////////////////////////////////////////////////////////////////////////////////
+
+  class WorkItem {
+
+// -----------------------------------------------------------------------------
+// --SECTION--                                                     inner classes
+// -----------------------------------------------------------------------------
+
+    public:
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief unique_ptr_deleter
+////////////////////////////////////////////////////////////////////////////////
+
+      struct deleter {
+        deleter() = default;
+
+        void operator() (WorkItem* ptr) const {
+          delete ptr;
         }
+      };
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief returns the dispatcher
+/// @brief unique_ptr
 ////////////////////////////////////////////////////////////////////////////////
 
-        Dispatcher* dispatcher () const {
-          return _dispatcher;
-        }
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief returns the dispatcher
-////////////////////////////////////////////////////////////////////////////////
-
-        AsyncJobManager* jobManager () const {
-          return _jobManager;
-        }
-
-///////////////////////////////////////////////////////////////////////////////
-/// @brief return the handler factory
-////////////////////////////////////////////////////////////////////////////////
-
-        HttpHandlerFactory* handlerFactory () const {
-          return _handlerFactory;
-        }
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief adds the endpoint list
-////////////////////////////////////////////////////////////////////////////////
-
-        void setEndpointList (const EndpointList* list);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief starts listening
-////////////////////////////////////////////////////////////////////////////////
-
-        void startListening ();
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief stops listining
-////////////////////////////////////////////////////////////////////////////////
-
-        void stopListening ();
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief registers a chunked task
-////////////////////////////////////////////////////////////////////////////////
-
-        void registerChunkedTask (HttpCommTask*, ssize_t);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief unregisters a chunked task
-////////////////////////////////////////////////////////////////////////////////
-
-        void unregisterChunkedTask (HttpCommTask*);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief removes all listen and comm tasks
-////////////////////////////////////////////////////////////////////////////////
-
-        void stop ();
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief handles connection request
-////////////////////////////////////////////////////////////////////////////////
-
-        void handleConnected (TRI_socket_t s, const ConnectionInfo& info);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief handles a connection close
-////////////////////////////////////////////////////////////////////////////////
-
-        void handleCommunicationClosed (HttpCommTask*);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief handles a connection failure
-////////////////////////////////////////////////////////////////////////////////
-
-        void handleCommunicationFailure (HttpCommTask*);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief callback if the handler received a signal
-////////////////////////////////////////////////////////////////////////////////
-
-        void handleAsync (HttpCommTask*);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief creates a job for asynchronous execution
-////////////////////////////////////////////////////////////////////////////////
-
-        bool handleRequestAsync (arangodb::WorkItem::uptr<HttpHandler>&, 
-                                 uint64_t* jobId);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief executes the handler directly or add it to the queue
-////////////////////////////////////////////////////////////////////////////////
-
-        bool handleRequest (HttpCommTask*, 
-                            arangodb::WorkItem::uptr<HttpHandler>&);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief handle the http response of the handler
-////////////////////////////////////////////////////////////////////////////////
-
-        void handleResponse (HttpCommTask*,
-                             HttpHandler*);
+      template<typename X> using uptr = std::unique_ptr<X, deleter>;
 
 // -----------------------------------------------------------------------------
-// --SECTION--                                                   protected types
+// --SECTION--                                      constructors and destructors
 // -----------------------------------------------------------------------------
 
-      protected:
-
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief Handler, Job, and Task tuple
+/// @brief destructor
 ////////////////////////////////////////////////////////////////////////////////
 
-        struct handler_task_job_t {
-          HttpHandler* _handler;
-          HttpCommTask* _task;
-          HttpServerJob* _job;
-        };
+    protected:
+      virtual ~WorkItem () {}
+  };
 
 // -----------------------------------------------------------------------------
-// --SECTION--                                                 protected methods
+// --SECTION--                                            class HandlerWorkStack
 // -----------------------------------------------------------------------------
 
-      protected:
-
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief opens a listen port
+/// @brief auto push and pop for HttpHandler
 ////////////////////////////////////////////////////////////////////////////////
 
-        bool openEndpoint (Endpoint* endpoint);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief handle request directly
-////////////////////////////////////////////////////////////////////////////////
-
-        HttpHandler::status_t handleRequestDirectly (HttpCommTask* task, HttpHandler* handler);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief shut downs a handler for a task
-////////////////////////////////////////////////////////////////////////////////
-
-        void shutdownHandlerByTask (Task* task);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief registers a task
-////////////////////////////////////////////////////////////////////////////////
-
-        void registerHandler (HttpHandler* handler, HttpCommTask* task);
+  class HandlerWorkStack {
 
 // -----------------------------------------------------------------------------
-// --SECTION--                                               protected variables
+// --SECTION--                                      constructors and destructors
 // -----------------------------------------------------------------------------
 
-      protected:
+    public:
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief the scheduler
+/// @brief constructor
 ////////////////////////////////////////////////////////////////////////////////
 
-        Scheduler* _scheduler;
+      HandlerWorkStack (triagens::rest::HttpHandler*, bool destroy);
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief the dispatcher
+/// @brief constructor
 ////////////////////////////////////////////////////////////////////////////////
 
-        Dispatcher* _dispatcher;
+      HandlerWorkStack (WorkItem::uptr<triagens::rest::HttpHandler>&,
+                        bool destroy);
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief the handler factory
+/// @brief destructor
 ////////////////////////////////////////////////////////////////////////////////
 
-        HttpHandlerFactory* _handlerFactory;
+      ~HandlerWorkStack ();
+
+// -----------------------------------------------------------------------------
+// --SECTION--                                                    public methods
+// -----------------------------------------------------------------------------
+
+    public:
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief the job manager
+/// @brief returns the handler
 ////////////////////////////////////////////////////////////////////////////////
 
-        AsyncJobManager* _jobManager;
+      triagens::rest::HttpHandler* handler () const {
+        return _handler;
+      }
+
+// -----------------------------------------------------------------------------
+// --SECTION--                                                   private members
+// -----------------------------------------------------------------------------
+
+    private:
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief active listen tasks
+/// @brief handler
 ////////////////////////////////////////////////////////////////////////////////
 
-        std::vector<ListenTask*> _listenTasks;
+      triagens::rest::HttpHandler* _handler;
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief defined ports and addresses
+/// @brief destroy on release
 ////////////////////////////////////////////////////////////////////////////////
 
-        const EndpointList* _endpointList;
+      bool _destroy;
+  };
+
+// -----------------------------------------------------------------------------
+// --SECTION--                                                    module methods
+// -----------------------------------------------------------------------------
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief mutex for comm tasks
+/// @brief starts garbage collector
 ////////////////////////////////////////////////////////////////////////////////
 
-#ifdef TRI_USE_SPIN_LOCK_GENERAL_SERVER
-        triagens::basics::SpinLock _commTasksLock;
-#else
-        triagens::basics::Mutex _commTasksLock;
-#endif
+  void InitializeWorkMonitor ();
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief active comm tasks
+/// @brief stops garbage collector
 ////////////////////////////////////////////////////////////////////////////////
 
-        std::unordered_set<HttpCommTask*> _commTasks;
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief keep-alive timeout
-////////////////////////////////////////////////////////////////////////////////
-
-        double _keepAliveTimeout;
-    };
-  }
+  void ShutdownWorkMonitor ();
 }
 
 #endif
@@ -362,8 +365,3 @@ namespace triagens {
 // -----------------------------------------------------------------------------
 // --SECTION--                                                       END-OF-FILE
 // -----------------------------------------------------------------------------
-
-// Local Variables:
-// mode: outline-minor
-// outline-regexp: "/// @brief\\|/// {@inheritDoc}\\|/// @page\\|// --SECTION--\\|/// @\\}"
-// End:

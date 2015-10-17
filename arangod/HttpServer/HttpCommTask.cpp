@@ -29,6 +29,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "HttpCommTask.h"
+
 #include "Basics/StringBuffer.h"
 #include "Basics/logging.h"
 #include "Basics/MutexLocker.h"
@@ -38,6 +39,7 @@
 #include "HttpServer/HttpServerJob.h"
 #include "Scheduler/Scheduler.h"
 
+using namespace arangodb;
 using namespace triagens::basics;
 using namespace triagens::rest;
 using namespace std;
@@ -50,7 +52,7 @@ using namespace std;
 /// @brief constructs a new async chunked task
 ////////////////////////////////////////////////////////////////////////////////
 
-AsyncChunkedTask::AsyncChunkedTask (HttpCommTask* output) 
+AsyncChunkedTask::AsyncChunkedTask (HttpCommTask* output)
   : Task("AsyncChunkedTask"),
     _output(output),
     _done(false),
@@ -129,7 +131,7 @@ void AsyncChunkedTask::cleanup () {
 /// @brief handles the event
 ////////////////////////////////////////////////////////////////////////////////
 
-bool AsyncChunkedTask::handleEvent (EventToken token, 
+bool AsyncChunkedTask::handleEvent (EventToken token,
                                     EventType revents) {
   if (_watcher == token && (revents & EVENT_ASYNC)) {
     return handleAsync();
@@ -149,7 +151,7 @@ bool AsyncChunkedTask::handleAsync () {
     _output->sendChunk(_data);
     _data = nullptr;
   }
-    
+
   if (_done) {
     _output->finishedChunked();
     _done = false;
@@ -223,7 +225,7 @@ HttpCommTask::HttpCommTask (HttpServer* server,
     (int) _connectionInfo.serverPort,
     _connectionInfo.clientAddress.c_str(),
     (int) _connectionInfo.clientPort
-  );
+    );
 
   ConnectionStatisticsAgentSetHttp(this);
   ConnectionStatisticsAgent::release();
@@ -243,7 +245,9 @@ HttpCommTask::~HttpCommTask () {
     clearCurrentJob();
   }
 
-  delete _handler;
+  if (_handler != nullptr) {
+    WorkMonitor::releaseHandler(_handler);
+  }
 
   LOG_TRACE("connection closed, client %d",
             (int) TRI_get_fd_or_handle_of_socket(_commSocket));
@@ -326,13 +330,13 @@ bool HttpCommTask::processRead () {
       // read buffer contents are way to small. we can exit here directly
       return false;
     }
-    
-    if (this->RequestStatisticsAgent::_statistics != nullptr &&  
+
+    if (this->RequestStatisticsAgent::_statistics != nullptr &&
         this->RequestStatisticsAgent::_statistics->_readStart == 0.0) {
       RequestStatisticsAgentSetReadStart(this);
     }
 
-    for (;  ptr < end;  ptr++) {
+    for (; ptr < end; ptr++) {
       if (ptr[0] == '\r' && ptr[1] == '\n' && ptr[2] == '\r' && ptr[3] == '\n') {
         break;
       }
@@ -349,7 +353,7 @@ bool HttpCommTask::processRead () {
       // header is too large
       HttpResponse response(HttpResponse::REQUEST_HEADER_FIELDS_TOO_LARGE, getCompatibility());
 
-      // we need to close the connection, because there is no way we 
+      // we need to close the connection, because there is no way we
       // know what to remove and then continue
       resetState(true);
       handleResponse(&response);
@@ -363,7 +367,7 @@ bool HttpCommTask::processRead () {
 
       LOG_TRACE("HTTP READ FOR %p: %s", (void*) this,
                 string(_readBuffer->c_str() + _startPosition,
-                            _readPosition - _startPosition).c_str());
+                       _readPosition - _startPosition).c_str());
 
       // check that we know, how to serve this request
       // and update the connection information, i. e. client and server addresses and ports
@@ -379,7 +383,7 @@ bool HttpCommTask::processRead () {
         // internal server error
         HttpResponse response(HttpResponse::SERVER_ERROR, getCompatibility());
 
-        // we need to close the connection, because there is no way we 
+        // we need to close the connection, because there is no way we
         // know how to remove the body and then continue
         resetState(true);
         handleResponse(&response);
@@ -397,7 +401,7 @@ bool HttpCommTask::processRead () {
 
         HttpResponse response(HttpResponse::HTTP_VERSION_NOT_SUPPORTED, getCompatibility());
 
-        // we need to close the connection, because there is no way we 
+        // we need to close the connection, because there is no way we
         // know what to remove and then continue
         resetState(true);
         handleResponse(&response);
@@ -411,7 +415,7 @@ bool HttpCommTask::processRead () {
       if (_fullUrl.size() > 16384) {
         HttpResponse response(HttpResponse::REQUEST_URI_TOO_LONG, getCompatibility());
 
-        // we need to close the connection, because there is no way we 
+        // we need to close the connection, because there is no way we
         // know what to remove and then continue
         resetState(true);
         handleResponse(&response);
@@ -491,7 +495,7 @@ bool HttpCommTask::processRead () {
           // bad request, method not allowed
           HttpResponse response(HttpResponse::METHOD_NOT_ALLOWED, getCompatibility());
 
-          // we need to close the connection, because there is no way we 
+          // we need to close the connection, because there is no way we
           // know what to remove and then continue
           resetState(true);
 
@@ -518,7 +522,7 @@ bool HttpCommTask::processRead () {
 
         HttpResponse response(HttpResponse::SERVICE_UNAVAILABLE, getCompatibility());
 
-        // we need to close the connection, because there is no way we 
+        // we need to close the connection, because there is no way we
         // know what to remove and then continue
         resetState(true);
         handleResponse(&response);
@@ -622,7 +626,8 @@ bool HttpCommTask::processRead () {
 
   auto const compatibility = _request->compatibility();
 
-  HttpResponse::HttpResponseCode authResult = _server->handlerFactory()->authenticateRequest(_request);
+  HttpResponse::HttpResponseCode authResult
+    = _server->handlerFactory()->authenticateRequest(_request);
 
   // authenticated or an OPTIONS request. OPTIONS requests currently go unauthenticated
   if (authResult == HttpResponse::OK || isOptionsRequest) {
@@ -806,15 +811,14 @@ void HttpCommTask::addResponse (HttpResponse* response) {
 
   _writeBuffers.push_back(buffer.get());
   auto b = buffer.release();
-          
+
   LOG_TRACE("HTTP WRITE FOR %p: %s", (void*) this, b->c_str());
-          
+
   // clear body
   response->body().clear();
-          
-      
+
   double const totalTime = RequestStatisticsAgent::elapsedSinceReadStart();
-      
+
   _writeBuffersStats.push_back(RequestStatisticsAgent::transfer());
 
   // disable the following statement to prevent excessive logging of incoming requests
@@ -827,7 +831,7 @@ void HttpCommTask::addResponse (HttpResponse* response) {
             (unsigned long long) responseBodyLength,
             _fullUrl.c_str(),
             totalTime);
-          
+
   // start output
   fillWriteBuffer();
 }
@@ -940,19 +944,8 @@ void HttpCommTask::processCorsOptions (uint32_t compatibility) {
 ////////////////////////////////////////////////////////////////////////////////
 
 void HttpCommTask::processRequest (uint32_t compatibility) {
-  std::unique_ptr<HttpHandler> handler(_server->handlerFactory()->createHandler(_request));
 
-  if (handler == nullptr) {
-    LOG_TRACE("no handler is known, giving up");
-
-    HttpResponse response(HttpResponse::NOT_FOUND, compatibility);
-
-    clearRequest();
-    handleResponse(&response);
-
-    return;
-  }
-
+  // check for deflate
   bool found;
   std::string const& acceptEncoding = _request->header("accept-encoding", found);
 
@@ -965,6 +958,20 @@ void HttpCommTask::processRequest (uint32_t compatibility) {
   // check for an async request
   std::string const& asyncExecution = _request->header("x-arango-async", found);
 
+  // create handler, this will take over the request
+  WorkItem::uptr<HttpHandler> handler(_server->handlerFactory()->createHandler(_request));
+
+  if (handler == nullptr) {
+    LOG_TRACE("no handler is known, giving up");
+
+    HttpResponse response(HttpResponse::NOT_FOUND, compatibility);
+
+    clearRequest();
+    handleResponse(&response);
+
+    return;
+  }
+
   // clear request object
   _request = nullptr;
   RequestStatisticsAgent::transfer(handler.get());
@@ -973,7 +980,6 @@ void HttpCommTask::processRequest (uint32_t compatibility) {
   bool ok = false;
 
   if (found && (asyncExecution == "true" || asyncExecution == "store")) {
-
     RequestStatisticsAgentSetAsync(this);
     uint64_t jobId = 0;
 
@@ -1145,7 +1151,7 @@ void HttpCommTask::cleanup () {
 /// {@inheritDoc}
 ////////////////////////////////////////////////////////////////////////////////
 
-bool HttpCommTask::handleEvent (EventToken token, 
+bool HttpCommTask::handleEvent (EventToken token,
                                 EventType events) {
   bool result = SocketTask::handleEvent(token, events);
 
@@ -1178,11 +1184,11 @@ bool HttpCommTask::handleAsync () {
   TRI_ASSERT(_handler != nullptr);
   TRI_ASSERT(! _job->hasHandler());
 
-  _job->beginShutdown(); 
+  _job->beginShutdown();
   _job = nullptr;
 
   _server->handleResponse(this, _handler);
-  delete _handler;
+  WorkMonitor::releaseHandler(_handler);
   _handler = nullptr;
 
   _server->handleAsync(this);
@@ -1226,7 +1232,7 @@ bool HttpCommTask::handleRead ()  {
     }
   }
   else {
-    // if we don't close here, the scheduler thread may fall into a 
+    // if we don't close here, the scheduler thread may fall into a
     // busy wait state, consuming 100% CPU!
     _clientClosed = true;
   }

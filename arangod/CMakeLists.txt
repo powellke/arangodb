@@ -212,6 +212,7 @@ add_executable(
     Utils/Transaction.cpp
     Utils/TransactionContext.cpp
     Utils/V8TransactionContext.cpp
+    Utils/WorkMonitorArangod.cpp
     V8Server/ApplicationV8.cpp
     V8Server/V8Job.cpp
     V8Server/V8PeriodicTask.cpp

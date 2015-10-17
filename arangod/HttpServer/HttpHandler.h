@@ -35,6 +35,7 @@
 #include "Dispatcher/Job.h"
 #include "Rest/HttpResponse.h"
 #include "Statistics/StatisticsAgent.h"
+#include "Basics/WorkMonitor.h"
 
 // -----------------------------------------------------------------------------
 // --SECTION--                                              forward declarations
@@ -55,7 +56,8 @@ namespace triagens {
 /// @brief abstract class for http handlers
 ////////////////////////////////////////////////////////////////////////////////
 
-    class HttpHandler : public RequestStatisticsAgent {
+    class HttpHandler : public RequestStatisticsAgent, 
+                        public arangodb::WorkItem {
       HttpHandler (HttpHandler const&) = delete;
       HttpHandler& operator= (HttpHandler const&) = delete;
 
@@ -79,7 +81,8 @@ namespace triagens {
 /// @brief destructs a handler
 ////////////////////////////////////////////////////////////////////////////////
 
-        virtual ~HttpHandler ();
+      protected:
+        ~HttpHandler ();
 
 // -----------------------------------------------------------------------------
 // --SECTION--                                                      public types

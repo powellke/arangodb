@@ -33,6 +33,7 @@
 #include "Basics/Mutex.h"
 #include "Basics/MutexLocker.h"
 #include "Basics/logging.h"
+#include "Basics/WorkMonitor.h"
 #include "Dispatcher/Dispatcher.h"
 #include "HttpServer/AsyncJobManager.h"
 #include "HttpServer/HttpCommTask.h"
@@ -43,6 +44,7 @@
 #include "Scheduler/ListenTask.h"
 #include "Scheduler/Scheduler.h"
 
+using namespace arangodb;
 using namespace triagens::basics;
 using namespace triagens::rest;
 using namespace std;
@@ -61,7 +63,7 @@ using namespace std;
 /// @brief map of ChunkedTask
 ////////////////////////////////////////////////////////////////////////////////
 
-static std::unordered_map<uint64_t, HttpCommTask*> HttpCommTaskMap;
+static unordered_map<uint64_t, HttpCommTask*> HttpCommTaskMap;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief lock for the above map
@@ -70,7 +72,7 @@ static std::unordered_map<uint64_t, HttpCommTask*> HttpCommTaskMap;
 static Mutex HttpCommTaskMapLock;
 
 // -----------------------------------------------------------------------------
-// --SECTION--                                               class HttpServer
+// --SECTION--                                                  class HttpServer
 // -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
@@ -84,7 +86,7 @@ static Mutex HttpCommTaskMapLock;
 int HttpServer::sendChunk (uint64_t taskId, const string& data) {
   MUTEX_LOCKER(HttpCommTaskMapLock);
 
-  auto&& it = HttpCommTaskMap.find(taskId);
+  auto && it = HttpCommTaskMap.find(taskId);
 
   if (it == HttpCommTaskMap.end()) {
     return TRI_ERROR_TASK_NOT_FOUND;
@@ -92,7 +94,7 @@ int HttpServer::sendChunk (uint64_t taskId, const string& data) {
 
   return it->second->signalChunk(data);
 }
-        
+
 // -----------------------------------------------------------------------------
 // --SECTION--                                      constructors and destructors
 // -----------------------------------------------------------------------------
@@ -150,7 +152,7 @@ HttpCommTask* HttpServer::createCommTask (TRI_socket_t s, const ConnectionInfo& 
 ////////////////////////////////////////////////////////////////////////////////
 
 void HttpServer::setEndpointList (const EndpointList* list) {
-   _endpointList = list;
+  _endpointList = list;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -160,7 +162,7 @@ void HttpServer::setEndpointList (const EndpointList* list) {
 void HttpServer::startListening () {
   auto endpoints = _endpointList->getByPrefix(encryptionType());
 
-  for (auto&& i : endpoints) {
+  for (auto && i : endpoints) {
     LOG_TRACE("trying to bind to endpoint '%s' for requests", i.first.c_str());
 
     bool ok = openEndpoint(i.second);
@@ -218,7 +220,7 @@ void HttpServer::stop () {
 
     {
       GENERAL_SERVER_LOCKER(_commTasksLock);
- 
+
       if (_commTasks.empty()) {
         break;
       }
@@ -303,10 +305,10 @@ void HttpServer::handleAsync (HttpCommTask* task) {
 /// @brief create a job for asynchronous execution (using the dispatcher)
 ////////////////////////////////////////////////////////////////////////////////
 
-bool HttpServer::handleRequestAsync (std::unique_ptr<HttpHandler>& handler, 
+bool HttpServer::handleRequestAsync (WorkItem::uptr<HttpHandler>& handler,
                                      uint64_t* jobId) {
   // execute the handler using the dispatcher
-  std::unique_ptr<HttpServerJob> job(new HttpServerJob(this, handler.get(), nullptr));
+  unique_ptr<HttpServerJob> job(new HttpServerJob(this, handler.get(), nullptr));
   // handler now belongs to the job
   auto h = handler.release();
 
@@ -343,41 +345,41 @@ bool HttpServer::handleRequestAsync (std::unique_ptr<HttpHandler>& handler,
 /// @brief executes the handler directly or add it to the queue
 ////////////////////////////////////////////////////////////////////////////////
 
-bool HttpServer::handleRequest (HttpCommTask* task, 
-                                std::unique_ptr<HttpHandler>& handler) {
-  // execute handler and (possibly) requeue
-  while (true) {
-    // directly execute the handler within the scheduler thread
-    if (handler->isDirect()) {
-      HttpHandler::status_t status = handleRequestDirectly(task, handler.get());
+bool HttpServer::handleRequest (HttpCommTask* task,
+                                WorkItem::uptr<HttpHandler>& handler) {
 
-      if (status.status != HttpHandler::HANDLER_REQUEUE) {
-        return true;
-      }
+  // direct handlers
+  if (handler->isDirect()) {
+    HandlerWorkStack work(handler, true);
+    HttpHandler::status_t status;
+
+    do {
+      status = handleRequestDirectly(task, work.handler());
     }
+    while (status.status == HttpHandler::HANDLER_REQUEUE);
 
-    // execute the handler using the dispatcher
-    else {
-      std::unique_ptr<HttpServerJob> job(new HttpServerJob(this, handler.get(), task));
-      // handler now belongs to the job
-      auto h = handler.release();
-  
-      h->RequestStatisticsAgent::transfer(job.get());
-
-      task->setCurrentJob(job.get());
-
-      if (_dispatcher->addJob(job.get()) != TRI_ERROR_NO_ERROR) {
-        task->clearCurrentJob();
-        return false;
-      }
-
-      // job now belongs to the dispatcher
-      job.release();
-      return true;
-    }
+    return true;
   }
 
-  // just to pacify compilers
+  // use a dispatcher queue
+  unique_ptr<HttpServerJob> job(new HttpServerJob(this, handler.get(), task));
+
+  // handler now belongs to the job
+  auto h = handler.release();
+
+  h->RequestStatisticsAgent::transfer(job.get());
+
+  // set current job inside the task BEFORE calling addJob
+  task->setCurrentJob(job.get());
+
+  // add the job to the dispatcher
+  if (_dispatcher->addJob(job.get()) != TRI_ERROR_NO_ERROR) {
+    task->clearCurrentJob();
+    return false;
+  }
+
+  // job now belongs to the dispatcher
+  job.release();
   return true;
 }
 
@@ -398,7 +400,7 @@ void HttpServer::handleResponse (HttpCommTask* task,
 
   RequestStatisticsAgentSetRequestEnd(handler);
   handler->RequestStatisticsAgent::transfer(task);
-    
+
   if (response != nullptr) {
     task->handleResponse(response);
   }
@@ -438,10 +440,11 @@ bool HttpServer::openEndpoint (Endpoint* endpoint) {
 /// @brief handle request directly
 ////////////////////////////////////////////////////////////////////////////////
 
-HttpHandler::status_t HttpServer::handleRequestDirectly (HttpCommTask* task, HttpHandler* handler) {
+HttpHandler::status_t HttpServer::handleRequestDirectly (HttpCommTask* task,
+                                                         HttpHandler* handler) {
   HttpHandler::status_t status(HttpHandler::HANDLER_FAILED);
 
-  RequestStatisticsAgentSetRequestStart(handler);
+  RequestStatisticsAgentSetRequestStart(handler); // FMH TODO: move into monitor
 
   try {
     handler->prepareExecute();
@@ -449,21 +452,21 @@ HttpHandler::status_t HttpServer::handleRequestDirectly (HttpCommTask* task, Htt
     try {
       status = handler->execute();
     }
-    catch (const basics::Exception& ex) {
+    catch (const Exception& ex) {
       RequestStatisticsAgentSetExecuteError(handler);
 
       handler->handleError(ex);
     }
-    catch (std::exception const& ex) {
+    catch (exception const& ex) {
       RequestStatisticsAgentSetExecuteError(handler);
 
-      basics::Exception err(TRI_ERROR_SYS_ERROR, ex.what(), __FILE__, __LINE__);
+      Exception err(TRI_ERROR_SYS_ERROR, ex.what(), __FILE__, __LINE__);
       handler->handleError(err);
     }
     catch (...) {
       RequestStatisticsAgentSetExecuteError(handler);
 
-      basics::Exception err(TRI_ERROR_SYS_ERROR, __FILE__, __LINE__);
+      Exception err(TRI_ERROR_SYS_ERROR, __FILE__, __LINE__);
       handler->handleError(err);
     }
 
@@ -476,12 +479,12 @@ HttpHandler::status_t HttpServer::handleRequestDirectly (HttpCommTask* task, Htt
 
     handleResponse(task, handler);
   }
-  catch (basics::Exception const& ex) {
+  catch (Exception const& ex) {
     RequestStatisticsAgentSetExecuteError(handler);
 
     LOG_ERROR("caught exception: %s", DIAGNOSTIC_INFORMATION(ex));
   }
-  catch (std::exception const& ex) {
+  catch (exception const& ex) {
     RequestStatisticsAgentSetExecuteError(handler);
 
     LOG_ERROR("caught exception: %s", ex.what());

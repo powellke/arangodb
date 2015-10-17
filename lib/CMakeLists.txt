@@ -111,6 +111,7 @@ add_library(
     Basics/vector.cpp
     Basics/voc-errors.cpp
     Basics/voc-mimetypes.cpp
+    Basics/WorkMonitor.cpp
     Basics/WriteLocker.cpp
     Basics/WriteUnlocker.cpp
     Basics/xxhash.cpp

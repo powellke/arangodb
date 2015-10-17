@@ -40,8 +40,9 @@
 #include "Basics/ConditionLocker.h"
 #include "Basics/Exceptions.h"
 #include "Basics/logging.h"
+#include "Basics/WorkMonitor.h"
 
-
+using namespace arangodb;
 using namespace triagens::basics;
 
 // -----------------------------------------------------------------------------
@@ -55,8 +56,12 @@ using namespace triagens::basics;
 void Thread::startThread (void* arg) {
   Thread * ptr = static_cast<Thread*>(arg);
 
+  WorkMonitor::pushThread(ptr);
+
   ptr->runMe();
   ptr->cleanup();
+
+  WorkMonitor::destroyThread(ptr);
 }
 
 // -----------------------------------------------------------------------------
@@ -101,10 +106,11 @@ Thread::Thread (std::string const& name)
     _thread(),
     _threadId(),
     _finishedCondition(nullptr),
-    _started(0),
-    _running(0),
-    _joined(0),
-    _affinity(-1) {
+    _started(false),
+    _running(false),
+    _joined(false),
+    _affinity(-1),
+    _workDescription(nullptr) {
   TRI_InitThread(&_thread);
 }
 
@@ -113,7 +119,7 @@ Thread::Thread (std::string const& name)
 ////////////////////////////////////////////////////////////////////////////////
 
 Thread::~Thread () {
-  if (_running != 0) {
+  if (_running) {
     if (! isSilent()) {
       LOG_WARNING("forcefully shutting down thread '%s'", _name.c_str());
     }
@@ -154,11 +160,19 @@ bool Thread::isSilent () {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+/// @brief name of a thread
+////////////////////////////////////////////////////////////////////////////////
+
+const std::string& Thread::name () const {
+  return _name;
+}
+
+////////////////////////////////////////////////////////////////////////////////
 /// @brief getter for running
 ////////////////////////////////////////////////////////////////////////////////
 
 bool Thread::isRunning () {
-  return _running != 0;
+  return _running;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -176,11 +190,11 @@ TRI_tid_t Thread::threadId () {
 bool Thread::start (ConditionVariable * finishedCondition) {
   _finishedCondition = finishedCondition;
 
-  if (_started != 0) {
+  if (_started) {
     LOG_FATAL_AND_EXIT("called started on an already started thread");
   }
 
-  _started = 1;
+  _started = true;
 
   std::string text = "[" + _name + "]";
   bool ok = TRI_StartThread(&_thread, &_threadId, text.c_str(), &startThread, this);
@@ -201,7 +215,7 @@ bool Thread::start (ConditionVariable * finishedCondition) {
 ////////////////////////////////////////////////////////////////////////////////
 
 int Thread::stop () {
-  if (_running != 0) {
+  if (_running) {
     LOG_TRACE("trying to cancel (aka stop) the thread '%s'", _name.c_str());
     return TRI_StopThread(&_thread);
   }
@@ -220,7 +234,7 @@ int Thread::join () {
     res = TRI_JoinThread(&_thread);
 
     if (res == TRI_ERROR_NO_ERROR) {
-      _joined = 1;
+      _joined = true;
     }
   }
 
@@ -236,14 +250,14 @@ int Thread::shutdown () {
   size_t const WAIT = 10000;
 
   for (size_t i = 0;  i < MAX_TRIES;  ++i) {
-    if (_running == 0) {
+    if (! _running) {
       break;
     }
 
     usleep(WAIT);
   }
 
-  if (_running != 0) {
+  if (_running) {
     int res = TRI_StopThread(&_thread);
 
     if (res != TRI_ERROR_NO_ERROR) {
@@ -265,6 +279,30 @@ int Thread::shutdown () {
 
 void Thread::setProcessorAffinity (size_t c) {
   _affinity = (int) c;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief returns the current work description
+////////////////////////////////////////////////////////////////////////////////
+
+WorkDescription* Thread::workDescription () {
+  return _workDescription.load();
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief sets the current work description
+////////////////////////////////////////////////////////////////////////////////
+
+void Thread::setWorkDescription (WorkDescription* desc) {
+  _workDescription.store(desc);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief sets the previous work description
+////////////////////////////////////////////////////////////////////////////////
+
+WorkDescription* Thread::setPrevWorkDescription () {
+  return _workDescription.exchange(_workDescription.load()->_prev);
 }
 
 // -----------------------------------------------------------------------------
@@ -305,7 +343,7 @@ void Thread::runMe () {
     TRI_AllowCancelation();
   }
 
-  _running = 1;
+  _running = true;
 
   try {
     run();
@@ -321,7 +359,7 @@ void Thread::runMe () {
     throw;
   }
   catch (...) {
-    _running = 0;
+    _running = false;
     if (! isSilent()) {
       LOG_ERROR("exception caught in thread '%s'", _name.c_str());
       TRI_FlushLogging();
@@ -329,7 +367,7 @@ void Thread::runMe () {
     throw;
   }
 
-  _running = 0;
+  _running = false;
 
   if (_finishedCondition != nullptr) {
     CONDITION_LOCKER(locker, *_finishedCondition);

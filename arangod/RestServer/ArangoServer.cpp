@@ -93,11 +93,12 @@
 #include "VocBase/server.h"
 #include "Wal/LogfileManager.h"
 
-using namespace std;
+using namespace arangodb;
 using namespace triagens::basics;
 using namespace triagens::rest;
 using namespace triagens::admin;
 using namespace triagens::arango;
+using namespace std;
 
 bool ALLOW_USE_DATABASE_IN_REST_ACTIONS;
 
@@ -964,7 +965,7 @@ int ArangoServer::startupServer () {
       int n = _additionalThreads[i];
 
       if (n < 1) {
-	n = 1;
+        n = 1;
       }
 
       _additionalThreads[i] = n;
@@ -1137,6 +1138,12 @@ int ArangoServer::startupServer () {
   }
 
   // .............................................................................
+  // start the work monitor
+  // .............................................................................
+
+  InitializeWorkMonitor();
+
+  // .............................................................................
   // start the main event loop
   // .............................................................................
 
@@ -1202,6 +1209,7 @@ int ArangoServer::startupServer () {
   }
 
   TRI_ShutdownStatistics();
+  ShutdownWorkMonitor();
 
   return res;
 }
