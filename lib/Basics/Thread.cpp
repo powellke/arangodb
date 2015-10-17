@@ -41,6 +41,7 @@
 #include "Basics/Exceptions.h"
 #include "Basics/logging.h"
 #include "Basics/WorkMonitor.h"
+#include "velocypack/velocypack-aliases.h"
 
 using namespace arangodb;
 using namespace triagens::basics;
@@ -61,7 +62,7 @@ void Thread::startThread (void* arg) {
   ptr->runMe();
   ptr->cleanup();
 
-  WorkMonitor::destroyThread(ptr);
+  WorkMonitor::popThread(ptr);
 }
 
 // -----------------------------------------------------------------------------
@@ -303,6 +304,17 @@ void Thread::setWorkDescription (WorkDescription* desc) {
 
 WorkDescription* Thread::setPrevWorkDescription () {
   return _workDescription.exchange(_workDescription.load()->_prev);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief sets status
+////////////////////////////////////////////////////////////////////////////////
+
+void Thread::addStatus(VPackBuilder* b) {
+  b->add("asynchronousCancelation", VPackValue(_asynchronousCancelation));
+  b->add("started", VPackValue(_started.load()));
+  b->add("running", VPackValue(_running.load()));
+  b->add("affinity", VPackValue(_affinity));
 }
 
 // -----------------------------------------------------------------------------

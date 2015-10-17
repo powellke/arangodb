@@ -37,6 +37,10 @@
 
 namespace arangodb {
   struct WorkDescription;
+
+  namespace velocypack {
+    class Builder;
+  }
 }
 
 namespace triagens {
@@ -178,6 +182,12 @@ namespace triagens {
 ////////////////////////////////////////////////////////////////////////////////
 
         arangodb::WorkDescription* setPrevWorkDescription ();
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief sets status
+////////////////////////////////////////////////////////////////////////////////
+
+        virtual void addStatus(arangodb::velocypack::Builder* b);
 
 // -----------------------------------------------------------------------------
 // --SECTION--                                                 protected methods

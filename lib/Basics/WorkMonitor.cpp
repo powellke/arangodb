@@ -29,13 +29,14 @@
 
 #include "Basics/Mutex.h"
 #include "Basics/MutexLocker.h"
+#include "velocypack/velocypack-aliases.h"
 
 #include <boost/lockfree/queue.hpp>
 
 #include <iostream>
 
-using namespace triagens::basics;
 using namespace arangodb;
+using namespace triagens::basics;
 
 // -----------------------------------------------------------------------------
 // --SECTION--                                                 private variables
@@ -89,7 +90,6 @@ static void deleteWorkDescription (WorkDescription* desc) {
   if (desc->_destroy) {
     switch (desc->_type) {
       case WorkType::THREAD:
-        WorkMonitor::DELETE_THREAD(desc);
         break;
 
       case WorkType::HANDLER:
@@ -102,20 +102,24 @@ static void deleteWorkDescription (WorkDescription* desc) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief string representation of a work description
+/// @brief vpack representation of a work description
 ////////////////////////////////////////////////////////////////////////////////
 
-static std::string stringWorkDescription (WorkDescription* desc) {
-  if (desc == nullptr) {
-    return "idle";
-  }
-
+static void vpackWorkDescription (VPackBuilder* b, WorkDescription* desc) {
   switch (desc->_type) {
     case WorkType::THREAD:
-      return WorkMonitor::STRING_THREAD(desc);
+      WorkMonitor::VPACK_THREAD(b, desc);
+      break;
 
     case WorkType::HANDLER:
-      return WorkMonitor::STRING_HANDLER(desc);
+      WorkMonitor::VPACK_HANDLER(b, desc);
+      break;
+  }
+
+  if (desc->_prev != nullptr) {
+    b->add("parent", VPackValue(VPackValueType::Object));
+    vpackWorkDescription(b, desc->_prev);
+    b->close();
   }
 }
 
@@ -206,7 +210,8 @@ void WorkMonitor::pushThread (Thread* thread) {
   CURRENT_THREAD = thread;
 
   WorkDescription* desc = createWorkDescription(WorkType::THREAD);
-  new (&(desc->_data).name) std::string(thread->name());
+  desc->_data.thread = thread;
+  // new (&(desc->_data).name) std::string(thread->name());
 
   activateWorkDescription(desc);
 
@@ -220,11 +225,11 @@ void WorkMonitor::pushThread (Thread* thread) {
 /// @brief destroys a thread
 ////////////////////////////////////////////////////////////////////////////////
 
-void WorkMonitor::destroyThread (Thread* thread) {
+void WorkMonitor::popThread (Thread* thread) {
   WorkDescription* desc = deactivateWorkDescription();
 
   TRI_ASSERT(desc->_type == WorkType::THREAD);
-  TRI_ASSERT(desc->_data.name == thread->name());
+  TRI_ASSERT(desc->_data.thread == thread);
 
   freeWorkDescription(desc);
 
@@ -235,19 +240,23 @@ void WorkMonitor::destroyThread (Thread* thread) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief thread deleter
-////////////////////////////////////////////////////////////////////////////////
-
-void WorkMonitor::DELETE_THREAD (WorkDescription* desc) {
-  (desc->_data.name).~basic_string<char>();
-}
-
-////////////////////////////////////////////////////////////////////////////////
 /// @brief thread description string
 ////////////////////////////////////////////////////////////////////////////////
 
-std::string WorkMonitor::STRING_THREAD (WorkDescription* desc) {
-  return "idle";
+void WorkMonitor::VPACK_THREAD (VPackBuilder* b, WorkDescription* desc) {
+  b->add("type", VPackValue("thread"));
+  b->add("name", VPackValue(desc->_data.thread->name()));
+  b->add("status", VPackValue(VPackValueType::Object));
+  desc->_data.thread->addStatus(b);
+  b->close();
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief text deleter
+////////////////////////////////////////////////////////////////////////////////
+
+void WorkMonitor::DELETE_TEXT (WorkDescription* desc) {
+  (desc->_data.text).~basic_string<char>();
 }
 
 // -----------------------------------------------------------------------------
@@ -287,12 +296,32 @@ void WorkMonitor::run () {
       x = y;
 
       MutexLocker guard(&THREADS_LOCK);
+      VPackBuilder b;
+      b.add(VPackValue(VPackValueType::Array));
 
       for (auto& thread : THREADS) {
         WorkDescription* desc = thread->workDescription();
 
-        std::cout << thread->name() << ": " << stringWorkDescription(desc) << "\n";
+        if (desc != nullptr) {
+          b.add(VPackValue(VPackValueType::Object));
+          vpackWorkDescription(&b, desc);
+          b.close();
+        }
       }
+
+      b.close();
+
+      VPackSlice s(b.start());
+
+      VPackOptions options;
+      options.prettyPrint = true;
+
+      VPackStringSink sink;
+
+      VPackDumper dumper(&sink, options);
+      dumper.dump(s);
+
+      std::cout << sink.buffer << "\n";
 
       std::cout << "----------------------------------------------------------------------\n";
     }

@@ -190,7 +190,7 @@ bool ListenTask::handleEvent (EventToken token,
     _acceptFailures = 0;
 
     struct sockaddr_in6 addr_out_mem;
-    struct sockaddr_in* addr_out = (sockaddr_in*) &addr_out_mem;;
+    struct sockaddr_in* addr_out = (sockaddr_in*) &addr_out_mem;
     socklen_t len_out = sizeof(addr_out_mem);
 
     int res = TRI_getsockname(connectionSocket, (sockaddr*) addr_out, &len_out);
@@ -219,6 +219,7 @@ bool ListenTask::handleEvent (EventToken token,
     // set client address and port
     ConnectionInfo info;
 
+    Endpoint::DomainType type = _endpoint->getDomainType();
     char host[NI_MAXHOST], serv[NI_MAXSERV];
 
     if (getnameinfo((sockaddr*) addr, len,
@@ -229,8 +230,6 @@ bool ListenTask::handleEvent (EventToken token,
       info.clientPort = addr->sin_port;
     }
     else {
-      Endpoint::DomainType type = _endpoint->getDomainType();
-
       if (type == Endpoint::DOMAIN_IPV4) {
         char buf[INET_ADDRSTRLEN + 1];
         char const* p = inet_ntop(AF_INET, &addr->sin_addr, buf, sizeof(buf) - 1);
@@ -253,8 +252,11 @@ bool ListenTask::handleEvent (EventToken token,
       }
     }
 
+    // set server address and port
     info.serverAddress = _endpoint->getHost();
     info.serverPort    = _endpoint->getPort();
+
+    // set the endpoint
     info.endpoint      = _endpoint->getSpecification();
     info.endpointType  = _endpoint->getDomainType();
 

@@ -30,6 +30,7 @@
 #include <iostream>
 
 #include "HttpServer/HttpHandler.h"
+#include "velocypack/velocypack-aliases.h"
 
 using namespace arangodb;
 using namespace triagens::rest;
@@ -154,11 +155,35 @@ void WorkMonitor::DELETE_HANDLER (WorkDescription* desc) {
 /// @brief thread description string
 ////////////////////////////////////////////////////////////////////////////////
 
-std::string WorkMonitor::STRING_HANDLER (WorkDescription* desc) {
+void WorkMonitor::VPACK_HANDLER (VPackBuilder* b, WorkDescription* desc) {
   HttpHandler* handler = desc->_data.handler;
   const HttpRequest* request = handler->getRequest();
 
-  return "HANDLER '" + request->fullUrl() + "'";
+  b->add("type", VPackValue("http-handler"));
+  b->add("protocol", VPackValue(request->protocol()));
+  b->add("method", VPackValue(HttpRequest::translateMethod(request->requestType())));
+  b->add("url", VPackValue(request->fullUrl()));
+  b->add("httpVersion", VPackValue(request->httpVersion()));
+  b->add("database", VPackValue(request->databaseName()));
+  b->add("user", VPackValue(request->user()));
+  b->add("taskId", VPackValue(request->clientTaskId()));
+
+  auto& info = request->connectionInfo();
+
+  b->add("server", VPackValue(VPackValueType::Object));
+  b->add("address", VPackValue(info.serverAddress));
+  b->add("port", VPackValue(info.serverPort));
+  b->close();
+
+  b->add("client", VPackValue(VPackValueType::Object));
+  b->add("address", VPackValue(info.clientAddress));
+  b->add("port", VPackValue(info.clientPort));
+  b->close();
+
+  b->add("endpoint", VPackValue(VPackValueType::Object));
+  b->add("address", VPackValue(info.endpoint));
+  b->add("type", VPackValue(info.portType()));
+  b->close();
 }
 
 // -----------------------------------------------------------------------------

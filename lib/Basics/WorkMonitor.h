@@ -41,6 +41,9 @@ namespace triagens {
 }
 
 namespace arangodb {
+  namespace velocypack {
+    class Builder;
+  }
 
 // -----------------------------------------------------------------------------
 // --SECTION--                                               enum class WorkType
@@ -70,10 +73,11 @@ namespace arangodb {
     bool _destroy;
 
     union data {
-      data () {};
-      ~data () {};
+      data () {}
+      ~data () {}
 
-      std::string name;
+      std::string text;
+      triagens::basics::Thread* thread;
       triagens::rest::HttpHandler* handler;
     } _data;
 
@@ -139,22 +143,17 @@ namespace arangodb {
       static void pushThread (triagens::basics::Thread* thread);
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief destroys threads
+/// @brief pops a threads
 ////////////////////////////////////////////////////////////////////////////////
 
-      static void destroyThread (triagens::basics::Thread* thread);
-
-////////////////////////////////////////////////////////////////////////////////
-/// @brief thread deleter
-////////////////////////////////////////////////////////////////////////////////
-
-      static void DELETE_THREAD (WorkDescription* desc);
+      static void popThread (triagens::basics::Thread* thread);
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief thread description string
 ////////////////////////////////////////////////////////////////////////////////
 
-      static std::string STRING_THREAD (WorkDescription* desc);
+      static void VPACK_THREAD (arangodb::velocypack::Builder*,
+                                WorkDescription* desc);
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief pushes a handler
@@ -181,16 +180,23 @@ namespace arangodb {
       static void releaseHandler (triagens::rest::HttpHandler*);
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief thread deleter
+/// @brief handler deleter
 ////////////////////////////////////////////////////////////////////////////////
 
       static void DELETE_HANDLER (WorkDescription* desc);
 
 ////////////////////////////////////////////////////////////////////////////////
-/// @brief thread description string
+/// @brief handler description string
 ////////////////////////////////////////////////////////////////////////////////
 
-      static std::string STRING_HANDLER (WorkDescription* desc);
+      static void VPACK_HANDLER (arangodb::velocypack::Builder*,
+                                 WorkDescription* desc);
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief text deleter
+////////////////////////////////////////////////////////////////////////////////
+
+      static void DELETE_TEXT (WorkDescription* desc);
 
 // -----------------------------------------------------------------------------
 // --SECTION--                                                    Thread methods

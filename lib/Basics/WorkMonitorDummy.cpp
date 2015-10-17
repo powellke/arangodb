@@ -27,6 +27,8 @@
 
 #include "WorkMonitor.h"
 
+#include "velocypack/velocypack-aliases.h"
+
 using namespace arangodb;
 
 // -----------------------------------------------------------------------------
@@ -41,7 +43,15 @@ using namespace arangodb;
 /// @brief thread deleter
 ////////////////////////////////////////////////////////////////////////////////
 
-void WorkMonitor::DELETE_HANDLER (WorkDescription* desc) {
+void WorkMonitor::DELETE_HANDLER (WorkDescription*) {
+  TRI_ASSERT(false);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief thread description string
+////////////////////////////////////////////////////////////////////////////////
+
+void WorkMonitor::VPACK_HANDLER (VPackBuilder*, WorkDescription*) {
   TRI_ASSERT(false);
 }
 
